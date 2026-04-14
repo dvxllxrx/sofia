@@ -337,36 +337,36 @@ function Sofia({ tenant, tenantId, session, onLogout, onAdminPanel }) {
   const pct = Math.round((filled / camposKeys.length) * 100);
   const totalUnread = threads.reduce((a, th) => a + (th.unread || 0), 0);
 
-async function callAPI(history) {
-  console.log("API KEY:", import.meta.env.VITE_ANTHROPIC_API_KEY);
+  async function callAPI(history) {
+    console.log("API KEY:", import.meta.env.VITE_ANTHROPIC_API_KEY);
 
-  try {
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        messages: history.map(m => ({
-          role: m.role,
-          content: m.content
-        }))
-      })
-    });
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messages: history.map(m => ({
+            role: m.role,
+            content: m.content
+          }))
+        })
+      });
 
-    const text = await res.text();
+      const text = await res.text();
 
-    if (!res.ok) throw new Error(text);
+      if (!res.ok) throw new Error(text);
 
-    const data = JSON.parse(text);
+      const data = JSON.parse(text);
 
-    return data.content?.[0]?.text || "Sem resposta da IA";
+      return data.content?.[0]?.text || "Sem resposta da IA";
 
-  } catch (err) {
-    console.error("Erro API:", err);
-    throw err;
+    } catch (err) {
+      console.error("Erro API:", err);
+      throw err;
+    }
   }
-}
 
   // Enviar mensagem
   async function sendMsg() {
@@ -433,70 +433,231 @@ async function callAPI(history) {
 
   function resizeTa() { if (taRef.current) { taRef.current.style.height = "48px"; taRef.current.style.height = Math.min(taRef.current.scrollHeight, 120) + "px"; } }
 
-  // Follow-up
+  async function manualFU(id) {
+    if (!isHorario()) {
+      showToast("Fora do horário comercial (8h–18h).", "err");
+      return;
+    }
+
+    setFuRunning(true);
+
+    try {
+      const th = threads.find(x => x.id === id);
+      if (!th) return;
+
+      const ctx = [
+        th.lead?.nome && `Nome: ${th.lead.nome}`,
+        th.lead?.interesse && `Interesse: ${th.lead.interesse}`
+      ].filter(Boolean).join("\n");
+
+      const ul = th.msgs
+        .slice(-4)
+        .map(m => `[${m.role === "assistant" ? t.agente : "Cliente"}]: ${m.content}`)
+        .join("\n");
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messages: [{
+            role: "user",
+            content: `Você é ${t.agente} da ${t.nome}. Gere UMA mensagem de follow-up curta (máx 2 frases). Tom sofisticado, referência ao que mencionou. Finalize com pergunta. Apenas o texto.
+CONTEXTO:
+${ctx}
+ÚLTIMAS:
+${ul}`
+          }]
+        })
+      });
+
+      const d = await res.json();
+      const fuMsg = d.content?.[0]?.text?.trim();
+
+      if (!fuMsg) {
+        showToast("Erro ao gerar.", "err");
+        return;
+      }
+
+      updTh(id, p => ({
+        ...p,
+        msgs: [
+          ...p.msgs,
+          {
+            role: "assistant",
+            content: fuMsg,
+            ts: new Date().toISOString(),
+            isFollowup: true
+          }
+        ],
+        at: new Date().toISOString(),
+        fuCount: (p.fuCount || 0) + 1
+      }));
+
+      showToast("✓ Follow-up enviado!");
+    } catch {
+      showToast("Erro.", "err");
+    } finally {
+      setFuRunning(false);
+    }
+  }
+
   async function autoFU() {
     if (!isHorario()) return;
+
     for (const th of threads) {
       if (th.status === "convertido" || th.status === "perdido") continue;
       if ((th.fuCount || 0) >= 3) continue;
       if (Date.now() - new Date(th.at).getTime() < 4 * 3600000) continue;
       if (!th.msgs.find(m => m.role === "user")) continue;
-      const ctx = [th.lead?.nome && `Nome: ${th.lead.nome}`, th.lead?.interesse && `Interesse: ${th.lead.interesse}`].filter(Boolean).join("\n");
-      const ul = th.msgs.slice(-4).map(m => `[${m.role === "assistant" ? t.agente : "Cliente"}]: ${m.content}`).join("\n");
+
+      const ctx = [
+        th.lead?.nome && `Nome: ${th.lead.nome}`,
+        th.lead?.interesse && `Interesse: ${th.lead.interesse}`
+      ].filter(Boolean).join("\n");
+
+      const ul = th.msgs
+        .slice(-4)
+        .map(m => `[${m.role === "assistant" ? t.agente : "Cliente"}]: ${m.content}`)
+        .join("\n");
+
       try {
-        const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 180, messages: [{ role: "user", content: `Você é ${t.agente} da ${t.nome}. Gere UMA mensagem de follow-up curta (máx 2 frases) para reengajar cliente sem resposta há 4h. Tom sofisticado, referência ao que mencionou. Finalize com pergunta. Apenas o texto.\nCONTEXTO:\n${ctx}\nÚLTIMAS:\n${ul}` }] }) });
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            messages: [{
+              role: "user",
+              content: `Você é ${t.agente} da ${t.nome}. Gere UMA mensagem de follow-up curta (máx 2 frases) para reengajar cliente sem resposta há 4h. Tom sofisticado, referência ao que mencionou. Finalize com pergunta. Apenas o texto.
+CONTEXTO:
+${ctx}
+ÚLTIMAS:
+${ul}`
+            }]
+          })
+        });
+
         const d = await res.json();
         const fuMsg = d.content?.[0]?.text?.trim();
-        if (!fuMsg) continue;
-        updTh(th.id, p => ({ ...p, msgs: [...p.msgs, { role: "assistant", content: fuMsg, ts: new Date().toISOString(), isFollowup: true }], at: new Date().toISOString(), fuCount: (p.fuCount || 0) + 1, unread: (p.unread || 0) + 1 }));
-        showToast(`🔔 Follow-up: ${th.lead?.nome || "cliente"}`);
-      } catch { }
-    }
-  }
 
-  async function manualFU(id) {
-    if (!isHorario()) { showToast("Fora do horário comercial (8h–18h).", "err"); return; }
-    setFuRunning(true);
-    const th = threads.find(x => x.id === id); if (!th) { setFuRunning(false); return; }
-    const ctx = [th.lead?.nome && `Nome: ${th.lead.nome}`, th.lead?.interesse && `Interesse: ${th.lead.interesse}`].filter(Boolean).join("\n");
-    const ul = th.msgs.slice(-4).map(m => `[${m.role === "assistant" ? t.agente : "Cliente"}]: ${m.content}`).join("\n");
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 180, messages: [{ role: "user", content: `Você é ${t.agente} da ${t.nome}. Gere UMA mensagem de follow-up curta (máx 2 frases). Tom sofisticado, referência ao que mencionou. Finalize com pergunta. Apenas o texto.\nCONTEXTO:\n${ctx}\nÚLTIMAS:\n${ul}` }] }) });
-      const d = await res.json(); const fuMsg = d.content?.[0]?.text?.trim();
-      if (!fuMsg) { showToast("Erro ao gerar.", "err"); return; }
-      updTh(id, p => ({ ...p, msgs: [...p.msgs, { role: "assistant", content: fuMsg, ts: new Date().toISOString(), isFollowup: true }], at: new Date().toISOString(), fuCount: (p.fuCount || 0) + 1 }));
-      showToast("✓ Follow-up enviado!");
-    } catch { showToast("Erro.", "err"); }
-    finally { setFuRunning(false); }
+        if (!fuMsg) continue;
+
+        updTh(th.id, p => ({
+          ...p,
+          msgs: [
+            ...p.msgs,
+            {
+              role: "assistant",
+              content: fuMsg,
+              ts: new Date().toISOString(),
+              isFollowup: true
+            }
+          ],
+          at: new Date().toISOString(),
+          fuCount: (p.fuCount || 0) + 1,
+          unread: (p.unread || 0) + 1
+        }));
+
+        showToast(`🔔 Follow-up: ${th.lead?.nome || "cliente"}`);
+      } catch {
+        // silencioso
+      }
+    }
   }
 
   async function agendar() {
     setScheduling(true);
+
     try {
-      await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 400, messages: [{ role: "user", content: `Crie evento Google Calendar: visita ${t.nome} com ${curLead?.nome || "Cliente"}.\nInteresse: ${curLead?.interesse || "—"} | Ticket: ${curLead?.ticket || "—"}\nAmanhã 10h, 1h. Título: "Visita — ${curLead?.nome || "Cliente"}"\nLocal: ${t.endereco}` }], mcp_servers: [{ type: "url", url: "https://gcal.mcp.claude.com/mcp", name: "gcal" }] }) });
+      await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messages: [{
+            role: "user",
+            content: `Crie evento Google Calendar: visita ${t.nome} com ${curLead?.nome || "Cliente"}.
+Interesse: ${curLead?.interesse || "—"} | Ticket: ${curLead?.ticket || "—"}
+Amanhã 10h, 1h. Título: "Visita — ${curLead?.nome || "Cliente"}"
+Local: ${t.endereco}`
+          }]
+        })
+      });
+
       showToast("📅 Visita agendada!");
-    } catch { showToast("Erro ao agendar.", "err"); }
-    finally { setScheduling(false); }
+    } catch {
+      showToast("Erro ao agendar.", "err");
+    } finally {
+      setScheduling(false);
+    }
   }
 
   async function enviarEmail() {
     setMailing(true);
+
     try {
-      const sumario = Object.entries(curLead || {}).filter(([, v]) => v).map(([k, v]) => `${CAMPOS[k] || k}: ${v}`).join("\n");
-      const transcript = curMsgs.filter(m => m.role !== "system").map(m => `[${m.role === "assistant" ? t.agente : curLead?.nome || "Cliente"}]: ${m.content}`).join("\n\n");
-      await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 600, messages: [{ role: "user", content: `Email para equipe ${t.nome}.\nAssunto: "Lead ${t.agente} IA — ${curLead?.nome || "Cliente"} | Score ${score}/100"\nDADOS:\n${sumario}\nHISTÓRICO:\n${transcript}` }], mcp_servers: [{ type: "url", url: "https://gmail.mcp.claude.com/mcp", name: "gmail" }] }) });
+      const sumario = Object.entries(curLead || {})
+        .filter(([, v]) => v)
+        .map(([k, v]) => `${CAMPOS[k] || k}: ${v}`)
+        .join("\n");
+
+      const transcript = curMsgs
+        .filter(m => m.role !== "system")
+        .map(m => `[${m.role === "assistant" ? t.agente : curLead?.nome || "Cliente"}]: ${m.content}`)
+        .join("\n\n");
+
+      await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messages: [{
+            role: "user",
+            content: `Email para equipe ${t.nome}.
+Assunto: "Lead ${t.agente} IA — ${curLead?.nome || "Cliente"} | Score ${score}/100"
+DADOS:
+${sumario}
+HISTÓRICO:
+${transcript}`
+          }]
+        })
+      });
+
       showToast("✉ Relatório enviado!");
-    } catch { showToast("Erro ao enviar.", "err"); }
-    finally { setMailing(false); }
+    } catch {
+      showToast("Erro ao enviar.", "err");
+    } finally {
+      setMailing(false);
+    }
   }
 
   function exportCSV() {
     const cols = ["nome", "telefone", "canal", "interesse", "ambiente", "ticket", "prazo", "qual", "intencao", "objecoes", "resumo", "proximo", "status", "fuCount", "at"];
+
     const header = cols.join(";");
-    const rows = threads.map(th => cols.map(c => `"${((th.lead || {})[c] || th[c] || "").toString().replace(/"/g, '""')}"`).join(";"));
+
+    const rows = threads.map(th =>
+      cols.map(c =>
+        `"${((th.lead || {})[c] || th[c] || "").toString().replace(/"/g, '""')}"`
+      ).join(";")
+    );
+
     const csv = [header, ...rows].join("\n");
-    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
-    const a = document.createElement("a"); a.href = url; a.download = `sofia_${tenantId}_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+
+    const url = URL.createObjectURL(
+      new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" })
+    );
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sofia_${tenantId}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+
     URL.revokeObjectURL(url);
   }
 
@@ -822,16 +983,36 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [adminView, setAdminView] = useState(false);
   const [ready, setReady] = useState(false);
-  useEffect(() => { const s = loadS(); if (s) setSession(s); setReady(true); }, []);
-  if (!ready) return <div style={{ minHeight: "100vh", background: "#0C0B09", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans',sans-serif", color: "#6A6050", fontSize: 12 }}>Carregando...</div>;
-  if (!session) return <Login onLogin={s => { setSession(s); }} />;
-  if (session.tipo === "admin" && adminView) return <AdminPanel session={session} onLogout={() => { clearS(); setSession(null); setAdminView(false); }} onVoltar={() => setAdminView(false)} />;
-  const tenantId =
-    session?.tipo === "admin"
-      ? "inspire"
-      : session?.tenantId;
 
-  export default function App() {
+  useEffect(() => {
+    const s = loadS();
+    if (s) setSession(s);
+    setReady(true);
+  }, []);
+
+  if (!ready)
+    return (
+      <div style={{ minHeight: "100vh", background: "#0C0B09", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans',sans-serif", color: "#6A6050", fontSize: 12 }}>
+        Carregando...
+      </div>
+    );
+
+  if (!session) return <Login onLogin={s => setSession(s)} />;
+
+  if (session.tipo === "admin" && adminView)
+    return (
+      <AdminPanel
+        session={session}
+        onLogout={() => {
+          clearS();
+          setSession(null);
+          setAdminView(false);
+        }}
+        onVoltar={() => setAdminView(false)}
+      />
+    );
+
+  const tenantId = session?.tipo === "admin" ? "inspire" : session?.tenantId;
   const tenant = TENANTS[tenantId] ?? TENANTS.inspire;
 
   if (!tenant || !tenant.ativo) {
@@ -847,8 +1028,13 @@ export default function App() {
       tenant={tenant}
       tenantId={tenantId}
       session={session}
-      onLogout={() => { clearS(); setSession(null); }}
-      onAdminPanel={session.tipo === "admin" ? () => setAdminView(true) : null}
+      onLogout={() => {
+        clearS();
+        setSession(null);
+      }}
+      onAdminPanel={
+        session.tipo === "admin" ? () => setAdminView(true) : null
+      }
     />
   );
 }
