@@ -1,4 +1,4 @@
-import SofiaAgent from '../../SofiaAgent.jsx'
+import SofiaAgent from './SofiaAgent.jsx'
 import { supabase } from './lib/supabase'
 import { useEffect, useState } from "react";
 
