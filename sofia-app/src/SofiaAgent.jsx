@@ -337,16 +337,36 @@ function Sofia({ tenant, tenantId, session, onLogout, onAdminPanel }) {
   const pct = Math.round((filled / camposKeys.length) * 100);
   const totalUnread = threads.reduce((a, th) => a + (th.unread || 0), 0);
 
-  // API
-  async function callAPI(history) {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system: PROMPT, messages: history.map(m => ({ role: m.role, content: m.content })) }),
+async function callAPI(history) {
+  console.log("API KEY:", import.meta.env.VITE_ANTHROPIC_API_KEY);
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messages: history.map(m => ({
+          role: m.role,
+          content: m.content
+        }))
+      })
     });
-    if (!res.ok) throw new Error(String(res.status));
-    const d = await res.json();
-    return d.content?.[0]?.text || "Desculpe, ocorreu um erro.";
+
+    const text = await res.text();
+
+    if (!res.ok) throw new Error(text);
+
+    const data = JSON.parse(text);
+
+    return data.content?.[0]?.text || "Sem resposta da IA";
+
+  } catch (err) {
+    console.error("Erro API:", err);
+    throw err;
   }
+}
 
   // Enviar mensagem
   async function sendMsg() {
@@ -811,26 +831,18 @@ export default function App() {
       ? "inspire"
       : session?.tenantId;
 
+  export default function App() {
   const tenant = TENANTS[tenantId] ?? TENANTS.inspire;
 
   if (!tenant || !tenant.ativo) {
     return (
-      <div style={{
-        minHeight: "100vh",
-        background: "#0C0B09",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "#E08A7A",
-        fontFamily: "'DM Sans',sans-serif",
-        fontSize: 13
-      }}>
+      <div style={{ minHeight: "100vh", background: "#0C0B09", display: "flex", alignItems: "center", justifyContent: "center", color: "#E08A7A" }}>
         Conta inativa.
       </div>
     );
   }
 
- return (
+  return (
     <Sofia
       tenant={tenant}
       tenantId={tenantId}
