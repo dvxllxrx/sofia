@@ -18,13 +18,20 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    res.status(200).json(data);
+    if (!response.ok) {
+      console.error("Erro Anthropic:", data);
+      return res.status(response.status).json({
+        error: data.error || "Erro na API da Anthropic"
+      });
+    }
 
-} catch (error) {
-  console.error("ERRO REAL:", error);
+    return res.status(200).json(data);
 
-  res.status(500).json({
-    error: error.message,
-    stack: error.stack
-  });
+  } catch (error) {
+    console.error("ERRO REAL:", error);
+
+    return res.status(500).json({
+      error: error.message || "Erro interno no servidor"
+    });
+  }
 }
